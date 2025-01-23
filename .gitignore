@@ -2,3 +2,4 @@
 output*
 meta-llama
 pissa-dataset
+*__pycache__*

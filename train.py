@@ -14,6 +14,8 @@ import datasets
 import numpy as np
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training, PeftModel, LoraRuntimeConfig
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from utils.clover_finetuning import orthogonal_and_replace_qkv_proj, merge_qkv_proj
+from tqdm import tqdm
 
 IGNORE_INDEX = -100
 logger = logging.getLogger(__name__)
@@ -32,7 +34,7 @@ class TrainingArguments(transformers.TrainingArguments):
     # Lora or PiSSA setting
     full_finetune : Optional[bool] = field(default=True)
     adapter_name_or_path: Optional[str] = field(default=None,metadata={"help": ("Pre-initialized PiSSA adapter path; when this is not None, the following arguments are ignored."),},)
-    init_weights: bool | str = field(default=True,metadata={"help": ("True -> LoRA; `pissa` -> PiSSA; `pissa_niter_16` -> Fast SVD PiSSA"),},)
+    init_weights: str = field(default="clover",metadata={"help": ("True -> LoRA; `pissa` -> PiSSA; `pissa_niter_16` -> Fast SVD PiSSA"),},)
     use_dora : Optional[bool] = field(default=False)
     target_modules : Optional[str] = field(default="q_proj,v_proj,k_proj,o_proj,gate_proj,down_proj,up_proj")
     lora_rank : Optional[int] = field(default=8)
@@ -63,7 +65,6 @@ class SavePeftModelCallback(transformers.TrainerCallback):
 
         peft_model_path = os.path.join(checkpoint_folder, "adapter_model")
         kwargs["model"].save_pretrained(peft_model_path)
-        kwargs["tokenizer"].save_pretrained(peft_model_path)
 
     def on_save(self, args, state, control, **kwargs):
         self.save_model(args, state, kwargs)
@@ -201,6 +202,28 @@ def build_model(script_args, checkpoint_dir):
             )
             model = get_peft_model(model, peft_config)
 
+    elif script_args.init_weights == 'clover':
+        if script_args.local_rank == 0:
+            print(f"num_heads: {model.config.num_attention_heads}, kv_heads: {model.config.num_key_value_heads}, head_dim: {model.config.hidden_size//model.config.num_attention_heads}")
+        for name, module in tqdm(model.named_modules()):
+            if name.endswith("self_attn"):
+                orthogonal_and_replace_qkv_proj(module, num_heads=model.config.num_attention_heads, kv_heads=model.config.num_key_value_heads, head_dim=model.config.hidden_size//model.config.num_attention_heads)
+        for name,param in model.named_parameters():
+            if "singular_value" in name:
+                param.requires_grad_(True)
+            else:
+                param.requires_grad_(False)
+        
+        if script_args.local_rank == 0:
+            trainable_param=0
+            total_param=0
+            for name,param in model.named_parameters():
+                if param.requires_grad:
+                    trainable_param+=param.numel()
+                    print(name)
+                total_param+=param.numel()
+            print(f"trainable param: {trainable_param}\t total param: {total_param}")
+
     for name, module in model.named_modules():
         if 'norm' in name or 'gate' in name:
             module = module.to(torch.float32)
@@ -291,6 +314,13 @@ def train():
         trainer.add_callback(SavePeftModelCallback)
     trainer.train(resume_from_checkpoint = resume_from_checkpoint_dir)
     trainer.save_state()
+    
+    if script_args.local_rank == 0 and script_args.init_weights=="clover":
+        for name, module in model.named_modules():
+            if name.endswith("self_attn"):
+                merge_qkv_proj(module, num_heads=model.config.num_attention_heads, head_dim=model.config.hidden_size//model.config.num_attention_heads, qkv_name="q_proj")
+                merge_qkv_proj(module, num_heads=model.config.num_key_value_heads, head_dim=model.config.hidden_size//model.config.num_attention_heads, qkv_name="k_proj")
+                merge_qkv_proj(module, num_heads=model.config.num_key_value_heads, head_dim=model.config.hidden_size//model.config.num_attention_heads, qkv_name="v_proj")
     if not script_args.full_finetune and script_args.merge:
         model = model.merge_and_unload()
         model.save_pretrained(script_args.output_dir)
