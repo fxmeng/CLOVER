@@ -14,7 +14,7 @@ import datasets
 import numpy as np
 from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training, PeftModel, LoraRuntimeConfig
 from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
-from utils.clover_finetuning import orthogonal_and_replace_qkv_proj, merge_qkv_proj
+from utils.clover_finetuning import orthogonal_and_replace_kv_proj, orthogonal_and_replace_up_proj ,merge_qkv_proj
 from tqdm import tqdm
 
 IGNORE_INDEX = -100
@@ -203,11 +203,15 @@ def build_model(script_args, checkpoint_dir):
             model = get_peft_model(model, peft_config)
 
     elif script_args.init_weights == 'clover':
+        head_dim = model.config.hidden_size//model.config.num_attention_heads
         if script_args.local_rank == 0:
-            print(f"num_heads: {model.config.num_attention_heads}, kv_heads: {model.config.num_key_value_heads}, head_dim: {model.config.hidden_size//model.config.num_attention_heads}")
+            print(f"num_heads: {model.config.num_attention_heads}, kv_heads: {model.config.num_key_value_heads}, head_dim: {head_dim}")
         for name, module in tqdm(model.named_modules()):
             if name.endswith("self_attn"):
-                orthogonal_and_replace_qkv_proj(module, num_heads=model.config.num_attention_heads, kv_heads=model.config.num_key_value_heads, head_dim=model.config.hidden_size//model.config.num_attention_heads)
+                orthogonal_and_replace_kv_proj(module, num_heads=model.config.num_attention_heads, kv_heads=model.config.num_key_value_heads, head_dim=head_dim)
+            elif name.endswith("mlp"):
+                orthogonal_and_replace_up_proj(module, num_heads=2*model.config.intermediate_size//head_dim, head_dim=head_dim//2)
+                
         for name,param in model.named_parameters():
             if "singular_value" in name:
                 param.requires_grad_(True)
@@ -318,9 +322,11 @@ def train():
     if script_args.local_rank == 0 and script_args.init_weights=="clover":
         for name, module in model.named_modules():
             if name.endswith("self_attn"):
-                merge_qkv_proj(module, num_heads=model.config.num_attention_heads, head_dim=model.config.hidden_size//model.config.num_attention_heads, qkv_name="q_proj")
-                merge_qkv_proj(module, num_heads=model.config.num_key_value_heads, head_dim=model.config.hidden_size//model.config.num_attention_heads, qkv_name="k_proj")
-                merge_qkv_proj(module, num_heads=model.config.num_key_value_heads, head_dim=model.config.hidden_size//model.config.num_attention_heads, qkv_name="v_proj")
+                head_dim = model.config.hidden_size//model.config.num_attention_heads
+                merge_qkv_proj(module, num_heads=model.config.num_key_value_heads, head_dim=head_dim, qkv_name="k_proj")
+                merge_qkv_proj(module, num_heads=model.config.num_key_value_heads, head_dim=head_dim, qkv_name="v_proj")
+            elif name.endswith("mlp"):
+                merge_qkv_proj(module, num_heads=2*model.config.intermediate_size//head_dim, head_dim=head_dim//2, qkv_name="up_proj")
     if not script_args.full_finetune and script_args.merge:
         model = model.merge_and_unload()
         model.save_pretrained(script_args.output_dir)

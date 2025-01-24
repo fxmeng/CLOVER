@@ -89,14 +89,11 @@ class QKVLinear(nn.Module):
         output = output.reshape(bsz, seq, self.num_heads*self.head_dim).contiguous()
         return output      
     
-def orthogonal_and_replace_qkv_proj(attn: nn.Module, num_heads: int, kv_heads: int, head_dim: int, q_name: str="q_proj", k_name: str="k_proj", v_name: str="v_proj", o_name: str="o_proj", niter=16):
-    q_proj = getattr(attn, q_name)
+def orthogonal_and_replace_kv_proj(attn: nn.Module, num_heads: int, kv_heads: int, head_dim: int, k_name: str="k_proj", v_name: str="v_proj", o_name: str="o_proj", niter=16):
     k_proj = getattr(attn, k_name)
     v_proj = getattr(attn, v_name)
     o_proj = getattr(attn, o_name)
     with torch.no_grad():
-        r_weight = orthogonalize_qk_proj(q_proj, num_heads, head_dim)
-        setattr(attn, q_name, QKVLinear(q_proj, r_weight, num_heads, head_dim))
         r_weight = orthogonalize_qk_proj(k_proj, kv_heads, head_dim)
         setattr(attn, k_name, QKVLinear(k_proj, r_weight, kv_heads, head_dim))
         if num_heads==kv_heads:
@@ -104,6 +101,12 @@ def orthogonal_and_replace_qkv_proj(attn: nn.Module, num_heads: int, kv_heads: i
         else:
             s_weight = orthogonalize_qk_proj(v_proj, kv_heads, head_dim)
         setattr(attn, v_name, QKVLinear(v_proj, s_weight, kv_heads, head_dim))
+        
+def orthogonal_and_replace_up_proj(mlp: nn.Module, num_heads: int, head_dim: int, up_name: str="up_proj"):
+    up_proj = getattr(mlp, up_name)
+    with torch.no_grad():
+        r_weight = orthogonalize_qk_proj(up_proj, num_heads, head_dim)
+        setattr(mlp, up_name, QKVLinear(up_proj, r_weight, num_heads, head_dim))
         
 def merge_qkv_proj(attn: nn.Module, num_heads: int, head_dim: int, qkv_name: str=None):
     with torch.no_grad():
