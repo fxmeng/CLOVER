@@ -268,7 +268,10 @@ with open(args.input_file, 'r') as f:
                 results[data['type']].append(y_pred == data["answer"])
             else:
                 results[data['type']].append(False)
-        
+
+avg_acc = []
 for key, value in results.items():
     acc = sum(value) / len(value)
+    avg_acc.append(acc)
     print(f'{key} length====', len(value), f', {key} acc====', acc)
+print(f"avg: {sum(avg_acc)/len(avg_acc)}")
