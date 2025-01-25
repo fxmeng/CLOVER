@@ -25,7 +25,7 @@ do
         --save_strategy "steps" \
         --save_steps 10000 \
         --save_total_limit 1 \
-        --learning_rate 1e-4 \
+        --learning_rate $lr \
         --weight_decay 0. \
         --warmup_steps 100 \
         --logging_steps 1 \
