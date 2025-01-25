@@ -323,7 +323,7 @@ def train():
         for name, module in model.named_modules():
             if name.endswith("self_attn"):
                 head_dim = model.config.hidden_size//model.config.num_attention_heads
-                merge_qkv_proj(module, num_heads=model.config.num_key_value_heads, head_dim=head_dim, qkv_name="k_proj")
+                merge_qkv_proj(module, num_heads=model.config.num_attention_heads, head_dim=head_dim, qkv_name="q_proj")
                 merge_qkv_proj(module, num_heads=model.config.num_key_value_heads, head_dim=head_dim, qkv_name="v_proj")
             elif name.endswith("mlp"):
                 merge_qkv_proj(module, num_heads=2*model.config.intermediate_size//head_dim, head_dim=head_dim//2, qkv_name="up_proj")

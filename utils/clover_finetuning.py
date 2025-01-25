@@ -67,7 +67,7 @@ def orthogonalize_vo_proj(v_proj, o_proj, num_heads, head_dim, niter=16):
     return s_weight
 
 class QKVLinear(nn.Module):
-    def __init__(self, linear: nn.Linear, s_weight, num_heads, head_dim, dropout_rate=0.05):
+    def __init__(self, linear: nn.Linear, s_weight, num_heads, head_dim):
         super().__init__()
         device = linear.weight.device
         dtype = linear.weight.dtype
@@ -75,27 +75,27 @@ class QKVLinear(nn.Module):
         self.head_dim = head_dim
         
         self.singular_vector = linear
-        self.dropout = nn.Dropout(p=dropout_rate)
+        #self.dropout = nn.Dropout(p=dropout_rate)
         self.singular_value = nn.Linear(head_dim , num_heads * head_dim, bias=False, device=device, dtype=dtype)
         self.singular_value.weight.data = s_weight.reshape(num_heads*head_dim, head_dim).contiguous()
     
     def forward(self, x):
         bsz, seq, _ = x.shape
         output = self.singular_vector(x) # (bsz, seq, num_heads*head_dim)
-        output = self.dropout(output)
+        #output = self.dropout(output)
         output = output.view(bsz, seq, self.num_heads, self.head_dim)
         singular_value = self.singular_value.weight.reshape(self.num_heads, self.head_dim, self.head_dim)
         output = torch.einsum("bshd,hde->bshe", output, singular_value)
         output = output.reshape(bsz, seq, self.num_heads*self.head_dim).contiguous()
         return output      
     
-def orthogonal_and_replace_kv_proj(attn: nn.Module, num_heads: int, kv_heads: int, head_dim: int, k_name: str="k_proj", v_name: str="v_proj", o_name: str="o_proj", niter=16):
-    k_proj = getattr(attn, k_name)
+def orthogonal_and_replace_kv_proj(attn: nn.Module, num_heads: int, kv_heads: int, head_dim: int, q_name: str="q_proj", v_name: str="v_proj", o_name: str="o_proj", niter=16):
+    q_proj = getattr(attn, q_name)
     v_proj = getattr(attn, v_name)
     o_proj = getattr(attn, o_name)
     with torch.no_grad():
-        r_weight = orthogonalize_qk_proj(k_proj, kv_heads, head_dim)
-        setattr(attn, k_name, QKVLinear(k_proj, r_weight, kv_heads, head_dim))
+        r_weight = orthogonalize_qk_proj(q_proj, kv_heads, head_dim)
+        setattr(attn, q_name, QKVLinear(q_proj, r_weight, kv_heads, head_dim))
         if num_heads==kv_heads:
             s_weight = orthogonalize_vo_proj(v_proj, o_proj, kv_heads, head_dim, niter)
         else:
