@@ -33,8 +33,8 @@ class CausalSelfAttention(nn.Module):
         super().__init__()
         assert config.n_embd % config.n_head == 0
         # key, query, value, output projections for all heads
-        self.q_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        self.k_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.q_proj = nn.Linear(config.n_embd, config.n_head * config.qk_head_embd, bias=config.bias)
+        self.k_proj = nn.Linear(config.n_embd, config.n_head * config.qk_head_embd, bias=config.bias)
         self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
         # regularization
@@ -188,9 +188,10 @@ class GPTConfig:
     n_layer: int = 12
     n_head: int = 12
     n_embd: int = 768
+    qk_head_embd: int = 64
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    record_norm: bool = True
+    record_norm: bool = False
 
 class GPT(nn.Module):
 

@@ -3,7 +3,7 @@ OUTPUT_PATH="output/commonsense-CLOVER-Llama-3-8b"
 DATA_PATH="pissa-dataset"
 export HF_ENDPOINT=https://hf-mirror.com
 
-for lr in 1e-4 5e-5 2e-4 2e-5 3e-4
+for lr in 1e-4
 do
     echo $lr
     # batch size = per_device_train_batch_size * gradient_accumulation_steps * num_gpus = 128
