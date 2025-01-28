@@ -270,7 +270,7 @@ class GPTConfig:
     vo_head_embd: int = 64
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    activation_pruning: bool = True
+    activation_pruning: bool = False
 
 class GPT(nn.Module):
 
