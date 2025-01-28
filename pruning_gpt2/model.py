@@ -192,7 +192,7 @@ class CausalSelfAttention(nn.Module):
         self.q_proj.weight.data = q_weight.reshape(self.n_head*self.qk_head_embd, self.n_embd).contiguous()
         
         if self.q_proj.bias is not None:
-            q_bias = self.q_proj.bias.data[order].reshape(self.n_head, self.qk_head_embd)
+            q_bias = self.q_proj.bias.data.reshape(self.n_head, self.qk_head_embd)
             q_bias = q_bias.gather(dim=1, index=order)
             self.q_proj.bias.data =  q_bias.reshape(self.n_head*self.qk_head_embd).contiguous()
         
@@ -201,7 +201,7 @@ class CausalSelfAttention(nn.Module):
         self.k_proj.weight.data = k_weight.reshape(self.n_head*self.qk_head_embd, self.n_embd).contiguous()
             
         if self.k_proj.bias is not None:
-            k_bias = self.k_proj.bias.data[order].reshape(self.n_head, self.qk_head_embd)
+            k_bias = self.k_proj.bias.data.reshape(self.n_head, self.qk_head_embd)
             k_bias = k_bias.gather(dim=1, index=order)
             self.k_proj.bias.data =  k_bias.reshape(self.n_head*self.qk_head_embd).contiguous()
    
@@ -213,7 +213,7 @@ class CausalSelfAttention(nn.Module):
         self.v_proj.weight.data = v_weight.reshape(self.n_head*self.vo_head_embd, self.n_embd).contiguous()
 
         if self.v_proj.bias is not None:
-            v_bias = self.v_proj.bias.data[order].reshape(self.n_head, self.vo_head_embd)
+            v_bias = self.v_proj.bias.data.reshape(self.n_head, self.vo_head_embd)
             v_bias = v_bias.gather(dim=1, index=order)
             self.v_proj.bias.data =  v_bias.reshape(self.n_head*self.vo_head_embd).contiguous()
         
