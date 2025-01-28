@@ -35,13 +35,14 @@ class CausalSelfAttention(nn.Module):
         # key, query, value, output projections for all heads
         self.q_proj = nn.Linear(config.n_embd, config.n_head * config.qk_head_embd, bias=config.bias)
         self.k_proj = nn.Linear(config.n_embd, config.n_head * config.qk_head_embd, bias=config.bias)
-        self.v_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
-        self.o_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        self.v_proj = nn.Linear(config.n_embd, config.n_head * config.vo_head_embd, bias=config.bias)
+        self.o_proj = nn.Linear(config.n_head * config.vo_head_embd, config.n_embd, bias=config.bias)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
         self.n_head = config.n_head
         self.qk_head_embd = config.qk_head_embd
+        self.vo_head_embd = config.vo_head_embd
         self.n_embd = config.n_embd
         self.dropout = config.dropout
         self.record_norm = config.record_norm
@@ -150,7 +151,77 @@ class CausalSelfAttention(nn.Module):
 
         self.v_proj.weight.data = v_weight.reshape(hidden_size, hidden_size).contiguous()
         self.o_proj.weight.data = o_weight.reshape(hidden_size, hidden_size).contiguous()
+     
+    def cal_qk_order_by_weight_norm(self):
+        q_weight = self.q_proj.weight.data
+        if self.q_proj.bias is not None:
+            q_bias = deepcopy(self.q_proj.bias.data).unsqueeze(1) # (hidden_size, 1)
+            q_weight = torch.cat([q_weight, q_bias],dim=1)
+        k_weight = self.k_proj.weight.data
+        if self.k_proj.bias is not None:
+            k_bias = deepcopy(self.k_proj.bias.data).unsqueeze(1) # (hidden_size, 1)
+            k_weight = torch.cat([k_weight, k_bias],dim=1)  # (hidden_size, k_in_dim+1)
+        q_weight = q_weight.reshape(self.n_head, self.qk_head_embd, -1)
+        k_weight = k_weight.reshape(self.n_head, self.qk_head_embd, -1)
+        q_norm = q_weight.norm(p=2, dim=-1)
+        k_norm = k_weight.norm(p=2, dim=-1)
+        order = q_norm * k_norm 
+        order = order.sort(dim=-1, descending=True)[1]
+        return order
+    
+    def cal_vo_order_by_weight_norm(self):
+        v_weight = self.v_proj.weight.data
+        if self.v_proj.bias is not None:
+            v_bias = deepcopy(self.v_proj.bias.data).unsqueeze(1) # (hidden_size, 1)
+            v_weight = torch.cat([v_weight, v_bias],dim=1)
+        o_weight = self.o_proj.weight.data
+        v_weight = v_weight.reshape(self.n_head, self.vo_head_embd, -1)
+        o_weight = o_weight.reshape(-1, self.n_head, self.vo_head_embd)
+        v_norm = v_weight.norm(p=2, dim=-1)
+        o_norm = o_weight.norm(p=2, dim=0)
+        order = v_norm * o_norm 
+        order = order.sort(dim=-1, descending=True)[1]
+        return order
+    
+    def reorder_qk_proj(self, order):
+        assert order.shape == (self.n_head, self.qk_head_embd)
+        order_expand = order.unsqueeze(-1).expand(-1, -1, self.n_embd)
+        
+        q_weight = self.q_proj.weight.data.reshape(self.n_head, self.qk_head_embd, -1)
+        q_weight = q_weight.gather(dim=1, index=order_expand)
+        self.q_proj.weight.data = q_weight.reshape(self.n_head*self.qk_head_embd, self.n_embd).contiguous()
+        
+        if self.q_proj.bias is not None:
+            q_bias = self.q_proj.bias.data[order].reshape(self.n_head, self.qk_head_embd)
+            q_bias = q_bias.gather(dim=1, index=order)
+            self.q_proj.bias.data =  q_bias.reshape(self.n_head*self.qk_head_embd).contiguous()
+        
+        k_weight = self.k_proj.weight.data.reshape(self.n_head, self.qk_head_embd, -1)
+        k_weight = k_weight.gather(dim=1, index=order_expand)
+        self.k_proj.weight.data = k_weight.reshape(self.n_head*self.qk_head_embd, self.n_embd).contiguous()
+            
+        if self.k_proj.bias is not None:
+            k_bias = self.k_proj.bias.data[order].reshape(self.n_head, self.qk_head_embd)
+            k_bias = k_bias.gather(dim=1, index=order)
+            self.k_proj.bias.data =  k_bias.reshape(self.n_head*self.qk_head_embd).contiguous()
+   
+    def reorder_vo_proj(self, order):
+        assert order.shape == (self.n_head, self.vo_head_embd)
+        order_expand_for_v = order.unsqueeze(-1).expand(-1, -1, self.n_embd)
+        v_weight = self.v_proj.weight.data.reshape(self.n_head, self.vo_head_embd, -1)
+        v_weight = v_weight.gather(dim=1, index=order_expand_for_v)
+        self.v_proj.weight.data = v_weight.reshape(self.n_head*self.vo_head_embd, self.n_embd).contiguous()
 
+        if self.v_proj.bias is not None:
+            v_bias = self.v_proj.bias.data[order].reshape(self.n_head, self.vo_head_embd)
+            v_bias = v_bias.gather(dim=1, index=order)
+            self.v_proj.bias.data =  v_bias.reshape(self.n_head*self.vo_head_embd).contiguous()
+        
+        order_expand_for_o = order.unsqueeze(0).expand(self.n_embd, -1, -1)
+        o_weight = self.o_proj.weight.data.reshape(-1, self.n_head, self.vo_head_embd)
+        o_weight = o_weight.gather(dim=2, index=order_expand_for_o)
+        self.o_proj.weight.data = o_weight.reshape( self.n_embd, self.n_head*self.vo_head_embd).contiguous()
+   
 class MLP(nn.Module):
 
     def __init__(self, config):
@@ -190,6 +261,7 @@ class GPTConfig:
     n_head: int = 12
     n_embd: int = 768
     qk_head_embd: int = 64
+    vo_head_embd: int = 64
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     record_norm: bool = False
@@ -288,6 +360,8 @@ class GPT(nn.Module):
 
     def pruning_and_load_state_dict(self, ckpt_dir):
         state_dict = torch.load(ckpt_dir,'cpu')
+        if "model" in state_dict.keys():
+            state_dict = state_dict["model"]
         for k in state_dict.keys():
             if k.endswith('attn.q_proj.weight') or k.endswith('attn.k_proj.weight'):
                 with torch.no_grad():
@@ -353,6 +427,7 @@ class GPT(nn.Module):
         for k in sd_keys_hf:
             if k.endswith('attn.c_attn.weight'):
                 with torch.no_grad():
+                    q_proj, k_proj, v_proj = sd_hf[k].t().split(config_args["n_embd"])
                     sd[k.replace('attn.c_attn.weight', 'attn.q_proj.weight')].copy_(q_proj)
                     sd[k.replace('attn.c_attn.weight', 'attn.k_proj.weight')].copy_(k_proj)
                     sd[k.replace('attn.c_attn.weight', 'attn.v_proj.weight')].copy_(v_proj)

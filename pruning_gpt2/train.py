@@ -31,7 +31,7 @@ from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 # I/O
-eval_interval = 200
+eval_interval = 20
 log_interval = 1
 eval_iters = 200
 eval_only = False # if True, script exits right after the first eval
@@ -41,7 +41,7 @@ wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
-data_dir = 'dataset'
+data_dir = '/data2/mengfanxu/nanoGPT/data/openwebtext'
 gradient_accumulation_steps = 8 * 8 # used to simulate larger batch sizes
 batch_size = 2 # if gradient_accumulation_steps > 1, this is the micro-batch size
 # model
@@ -151,10 +151,7 @@ for name, param in model.named_parameters():
     for target in trainable_module:
         if target in name:
             param.requires_grad=True
-    if param.requires_grad:
-        print(name)
 print(model)
-
 # initialize a GradScaler. If enabled=False scaler is a no-op
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
 

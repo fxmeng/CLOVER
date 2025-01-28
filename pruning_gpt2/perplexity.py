@@ -3,12 +3,11 @@ from tqdm import tqdm
 import tiktoken
 from datasets import load_from_disk
 
-def calculating_perplexity(model, data_path, stride = 512, device="cuda"):
+def calculating_perplexity(model, data_path, max_length = 1024, stride = 512, device="cuda"):
     test = load_from_disk(data_path)['test']
     enc = tiktoken.get_encoding("gpt2")
     data_input_ids = torch.LongTensor(enc.encode("\n\n".join(test["text"]))).unsqueeze(0)
     seq_len = data_input_ids.size(1)-1
-    max_length = model.config.block_size
     nll_sum = 0.0
     n_tokens = 0
     prev_end_loc = 0
