@@ -6,6 +6,7 @@ import argparse
 parser = argparse.ArgumentParser(description="Separate the principal singular value and singular vectors from base model")
 parser.add_argument("--model_path", type=str, required=True, help="The path of the base model.")
 parser.add_argument("--qk_head_embd", type=int, default=64)
+parser.add_argument("--vo_head_embd", type=int, default=64)
 parser.add_argument("--dataset_path", type=str, default="/data2/mengfanxu/CLOVer/pruning_gpt2/dataset/wikitext-2-raw-v1")
 parser.add_argument("--device", type=str, default="cuda")
 args = parser.parse_args()
@@ -18,6 +19,7 @@ config = GPTConfig(
     n_head=25,
     n_embd=1600,
     qk_head_embd=args.qk_head_embd,
+    vo_head_embd=args.vo_head_embd,
     dropout=0,
     bias=True
 )

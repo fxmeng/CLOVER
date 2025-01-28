@@ -45,10 +45,11 @@ data_dir = '/data2/mengfanxu/nanoGPT/data/openwebtext'
 gradient_accumulation_steps = 8 * 8 # used to simulate larger batch sizes
 batch_size = 2 # if gradient_accumulation_steps > 1, this is the micro-batch size
 # model
-qk_head_embd=32
-ckpt = f"/data2/mengfanxu/CLOVer/output/state_dict/pruning/gpt2-xl-qk{qk_head_embd}.pt"
+qk_head_embd=48
+vo_head_embd=48
+ckpt = f"/data2/mengfanxu/CLOVer/output/state_dict/orthogonal/gpt2-xl.pt"
 trainable_module = ["q_proj", "k_proj"]
-out_dir = f'output_{qk_head_embd}'
+out_dir = f'output_{qk_head_embd}_{vo_head_embd}'
 block_size = 1024
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 # adamw optimizer
@@ -135,6 +136,7 @@ model_args = dict(
     n_head=25,
     n_embd=1600,
     qk_head_embd=qk_head_embd,
+    vo_head_embd=vo_head_embd,
     dropout=dropout,
     bias=True,
     ) # start with model_args from command line
