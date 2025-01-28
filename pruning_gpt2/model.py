@@ -71,7 +71,7 @@ class CausalSelfAttention(nn.Module):
             
         k = k.view(B, T, self.n_head, self.qk_head_embd).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, self.qk_head_embd).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, nh, T, hs)
+        v = v.view(B, T, self.n_head, self.vo_head_embd).transpose(1, 2) # (B, nh, T, hs)
 
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
@@ -84,7 +84,7 @@ class CausalSelfAttention(nn.Module):
             att = F.softmax(att, dim=-1)
             att = self.attn_dropout(att)
             y = att @ v # (B, nh, T, T) x (B, nh, T, hs) -> (B, nh, T, hs)
-        y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side
+        y = y.transpose(1, 2).contiguous().view(B, T, self.n_head*self.vo_head_embd) # re-assemble all head outputs side by side
 
         # output projection
         y = self.resid_dropout(self.o_proj(y))
@@ -377,6 +377,27 @@ class GPT(nn.Module):
                     bias = bias[:,:self.config.qk_head_embd]
                     bias = bias.reshape(self.config.n_head*self.config.qk_head_embd)
                     state_dict[k] = bias.contiguous()
+            elif k.endswith('attn.v_proj.weight'):
+                with torch.no_grad():
+                    weight = state_dict[k].reshape(self.config.n_head, -1, self.config.n_embd)
+                    assert self.config.vo_head_embd<=weight.shape[1]
+                    weight = weight[:,:self.config.vo_head_embd,:]
+                    weight = weight.reshape(self.config.n_head*self.config.vo_head_embd, self.config.n_embd)
+                    state_dict[k] = weight.contiguous()
+            elif k.endswith('attn.v_proj.bias'):
+                with torch.no_grad():
+                    bias = state_dict[k].reshape(self.config.n_head, -1)
+                    assert self.config.vo_head_embd<=bias.shape[1]
+                    bias = bias[:,:self.config.vo_head_embd]
+                    bias = bias.reshape(self.config.n_head*self.config.vo_head_embd)
+                    state_dict[k] = bias.contiguous()
+            elif k.endswith('attn.o_proj.weight'):
+                with torch.no_grad():
+                    weight = state_dict[k].reshape(self.config.n_embd, self.config.n_head, -1)
+                    assert self.config.vo_head_embd<=weight.shape[-1]
+                    weight = weight[:,:,:self.config.vo_head_embd]
+                    weight = weight.reshape(self.config.n_embd, self.config.n_head*self.config.vo_head_embd)
+                    state_dict[k] = weight.contiguous()
         return self.load_state_dict(state_dict, strict=False)
 
     @classmethod
