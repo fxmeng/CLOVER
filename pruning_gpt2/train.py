@@ -45,11 +45,11 @@ data_dir = '/data2/mengfanxu/nanoGPT/data/openwebtext'
 gradient_accumulation_steps = 8 * 8 # used to simulate larger batch sizes
 batch_size = 2 # if gradient_accumulation_steps > 1, this is the micro-batch size
 # model
-qk_head_embd=48
-vo_head_embd=48
-ckpt = f"/data2/mengfanxu/CLOVer/output/state_dict/orthogonal/gpt2-xl.pt"
+qk_head_embd=8
+vo_head_embd=8
+ckpt = f"/data2/mengfanxu/CLOVer/output/state_dict/weight_reorder/gpt2-xl.pt"
 trainable_module = ["q_proj", "k_proj"]
-out_dir = f'output_{qk_head_embd}_{vo_head_embd}'
+out_dir = f'output_vanilla_{qk_head_embd}_{vo_head_embd}'
 block_size = 1024
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 # adamw optimizer
@@ -181,7 +181,7 @@ def estimate_loss():
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
-                logits, loss, _,_ = model(X, Y)
+                _, loss = model(X, Y)
             losses[k] = loss.item()
         out[split] = losses.mean()
     model.train()
@@ -257,7 +257,7 @@ while True:
             # looking at the source of that context manager, it just toggles this variable
             model.require_backward_grad_sync = (micro_step == gradient_accumulation_steps - 1)
         with ctx:
-            logits, loss,_,_ = model(X, Y)
+            logits, loss = model(X, Y)
             loss = loss / gradient_accumulation_steps # scale the loss to account for gradient accumulation
         # immediately async prefetch next batch while model is doing the forward pass on the GPU
         X, Y = get_batch('train')

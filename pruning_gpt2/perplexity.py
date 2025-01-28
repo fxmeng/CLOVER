@@ -18,7 +18,7 @@ def calculating_perplexity(model, data_path, max_length = 1024, stride = 512, de
         target_ids = data_input_ids[:, begin_loc+1:end_loc+1].to(device)
         target_ids[:, :-trg_len] = -100
         with torch.no_grad():
-            _,loss,_,_ = model(input_ids, targets=target_ids)
+            _,loss = model(input_ids, targets=target_ids)
 
             # loss is calculated using CrossEntropyLoss which averages over valid labels
             # N.B. the model only calculates loss over trg_len - 1 labels, because it internally shifts the labels

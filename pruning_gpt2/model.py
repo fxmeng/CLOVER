@@ -45,7 +45,7 @@ class CausalSelfAttention(nn.Module):
         self.vo_head_embd = config.vo_head_embd
         self.n_embd = config.n_embd
         self.dropout = config.dropout
-        self.record_norm = config.record_norm
+        self.activation_pruning = config.activation_pruning
         # flash attention make GPU go brrrrr but support is only in PyTorch >= 2.0
         self.flash = False #hasattr(torch.nn.functional, 'scaled_dot_product_attention')
         if not self.flash:
@@ -62,12 +62,16 @@ class CausalSelfAttention(nn.Module):
         k  = self.k_proj(x)
         v  = self.v_proj(x)
         
-        if self.record_norm:
+        if self.activation_pruning:
             with torch.no_grad():
-                qk_norm = (q*k).norm(p=2,dim=(0,1)).sqrt().to('cpu')
-                v_norm = v.norm(p=2,dim=(0,1)).to('cpu')
-        else:
-            qk_norm = v_norm=None
+                qk_norm = q.norm(p=2,dim=(0,1)) * k.norm(p=2,dim=(0,1))
+                qk_norm = qk_norm.reshape(self.n_head, self.qk_head_embd)
+                qk_order = qk_norm.sort(dim=-1, descending=True)[1]
+                self.reorder_qk_proj(qk_order)
+                vo_norm = v.norm(p=2,dim=(0,1)) * self.o_proj.weight.data.norm(p=2,dim=0)
+                vo_norm = vo_norm.reshape(self.n_head, self.vo_head_embd)
+                vo_order = vo_norm.sort(dim=-1, descending=True)[1]
+                self.reorder_vo_proj(vo_order)
             
         k = k.view(B, T, self.n_head, self.qk_head_embd).transpose(1, 2) # (B, nh, T, hs)
         q = q.view(B, T, self.n_head, self.qk_head_embd).transpose(1, 2) # (B, nh, T, hs)
@@ -88,7 +92,7 @@ class CausalSelfAttention(nn.Module):
 
         # output projection
         y = self.resid_dropout(self.o_proj(y))
-        return y, qk_norm, v_norm
+        return y
 
     def orthogonalize_qk_proj(self):
         q_device = self.q_proj.weight.device
@@ -184,6 +188,7 @@ class CausalSelfAttention(nn.Module):
         return order
     
     def reorder_qk_proj(self, order):
+        print("reorder_qk_proj")
         assert order.shape == (self.n_head, self.qk_head_embd)
         order_expand = order.unsqueeze(-1).expand(-1, -1, self.n_embd)
         
@@ -206,6 +211,7 @@ class CausalSelfAttention(nn.Module):
             self.k_proj.bias.data =  k_bias.reshape(self.n_head*self.qk_head_embd).contiguous()
    
     def reorder_vo_proj(self, order):
+        print("reorder_vo_proj")
         assert order.shape == (self.n_head, self.vo_head_embd)
         order_expand_for_v = order.unsqueeze(-1).expand(-1, -1, self.n_embd)
         v_weight = self.v_proj.weight.data.reshape(self.n_head, self.vo_head_embd, -1)
@@ -248,10 +254,10 @@ class Block(nn.Module):
         self.mlp = MLP(config)
 
     def forward(self, x):
-        output, qk_norm, v_norm = self.attn(self.ln_1(x))
+        output = self.attn(self.ln_1(x))
         x = x + output
         x = x + self.mlp(self.ln_2(x))
-        return x, qk_norm, v_norm
+        return x
 
 @dataclass
 class GPTConfig:
@@ -264,7 +270,7 @@ class GPTConfig:
     vo_head_embd: int = 64
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
-    record_norm: bool = False
+    activation_pruning: bool = True
 
 class GPT(nn.Module):
 
@@ -321,8 +327,6 @@ class GPT(nn.Module):
     def forward(self, idx, targets=None):
         device = idx.device
         b, t = idx.size()
-        qk_norm_list = []
-        v_norm_list = []
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
         pos = torch.arange(0, t, dtype=torch.long, device=device) # shape (t)
 
@@ -331,9 +335,7 @@ class GPT(nn.Module):
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
         for block in self.transformer.h:
-            x,qk_norm,v_norm = block(x)
-            qk_norm_list.append(qk_norm)
-            v_norm_list.append(v_norm)
+            x = block(x)
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -345,7 +347,7 @@ class GPT(nn.Module):
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
-        return logits, loss, qk_norm_list, v_norm_list
+        return logits, loss
 
     def crop_block_size(self, block_size):
         # model surgery to decrease the block size if necessary
