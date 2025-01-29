@@ -47,9 +47,9 @@ batch_size = 2 # if gradient_accumulation_steps > 1, this is the micro-batch siz
 # model
 qk_head_embd=8
 vo_head_embd=8
-ckpt = f"/data2/mengfanxu/CLOVer/output/state_dict/weight_reorder/gpt2-xl.pt"
-trainable_module = ["q_proj", "k_proj"]
-out_dir = f'output_vanilla_{qk_head_embd}_{vo_head_embd}'
+ckpt = f"/data2/mengfanxu/CLOVer/output/state_dict/orthogonal/gpt2-xl.pt"
+trainable_module = ["qk_proj", "vo_proj","q_proj.bias", "k_proj.bias","v_proj.bias", "o_proj.bias"]
+out_dir = f'output_peft_{qk_head_embd}_{vo_head_embd}'
 block_size = 1024
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 # adamw optimizer
@@ -139,6 +139,7 @@ model_args = dict(
     vo_head_embd=vo_head_embd,
     dropout=dropout,
     bias=True,
+    peft=True,
     ) # start with model_args from command line
 config = GPTConfig(**model_args)
 model = GPT(config)
@@ -148,6 +149,9 @@ if block_size < model.config.block_size:
     model.crop_block_size(block_size)
     model_args['block_size'] = block_size # so that the checkpoint will have the right value
 model.to(device)
+for name, module in model.named_modules():
+    if hasattr(module, 'peft_init'):
+        module.peft_init()
 for name, param in model.named_parameters():
     param.requires_grad=False
     for target in trainable_module:

@@ -21,7 +21,8 @@ config = GPTConfig(
     qk_head_embd=args.qk_head_embd,
     vo_head_embd=args.vo_head_embd,
     dropout=0,
-    bias=True
+    bias=True,
+    peft=True
 )
 model = GPT(config)
 model = model.to(args.device)

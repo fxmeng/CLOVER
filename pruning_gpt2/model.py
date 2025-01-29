@@ -37,9 +37,13 @@ class CausalSelfAttention(nn.Module):
         self.k_proj = nn.Linear(config.n_embd, config.n_head * config.qk_head_embd, bias=config.bias)
         self.v_proj = nn.Linear(config.n_embd, config.n_head * config.vo_head_embd, bias=config.bias)
         self.o_proj = nn.Linear(config.n_head * config.vo_head_embd, config.n_embd, bias=config.bias)
+        if config.peft:
+            self.qk_proj = nn.Linear(config.qk_head_embd, config.n_head * config.qk_head_embd, bias=False)
+            self.vo_proj = nn.Linear(config.vo_head_embd, config.n_head * config.vo_head_embd, bias=False)
         # regularization
         self.attn_dropout = nn.Dropout(config.dropout)
         self.resid_dropout = nn.Dropout(config.dropout)
+        self.use_peft = config.peft
         self.n_head = config.n_head
         self.qk_head_embd = config.qk_head_embd
         self.vo_head_embd = config.vo_head_embd
@@ -72,11 +76,14 @@ class CausalSelfAttention(nn.Module):
                 vo_norm = vo_norm.reshape(self.n_head, self.vo_head_embd)
                 vo_order = vo_norm.sort(dim=-1, descending=True)[1]
                 self.reorder_vo_proj(vo_order)
-            
-        k = k.view(B, T, self.n_head, self.qk_head_embd).transpose(1, 2) # (B, nh, T, hs)
+        
         q = q.view(B, T, self.n_head, self.qk_head_embd).transpose(1, 2) # (B, nh, T, hs)
-        v = v.view(B, T, self.n_head, self.vo_head_embd).transpose(1, 2) # (B, nh, T, hs)
-
+        if self.use_peft:
+            k = torch.einsum("bthd,hde->bthe", k.view(B, T, self.n_head, self.qk_head_embd), self.qk_proj.weight.view(self.n_head, self.qk_head_embd, self.qk_head_embd)).transpose(1, 2) # (B, nh, T, hs)
+            v = torch.einsum("bthd,hde->bthe", v.view(B, T, self.n_head, self.vo_head_embd), self.vo_proj.weight.view(self.n_head, self.vo_head_embd, self.vo_head_embd)).transpose(1, 2) # (B, nh, T, hs)
+        else:
+            k = k.view(B, T, self.n_head, self.qk_head_embd).transpose(1, 2) # (B, nh, T, hs)
+            v = v.view(B, T, self.n_head, self.vo_head_embd).transpose(1, 2) # (B, nh, T, hs)
         # causal self-attention; Self-attend: (B, nh, T, hs) x (B, nh, hs, T) -> (B, nh, T, T)
         if self.flash:
             # efficient attention using Flash Attention CUDA kernels
@@ -155,7 +162,53 @@ class CausalSelfAttention(nn.Module):
 
         self.v_proj.weight.data = v_weight.reshape(hidden_size, hidden_size).contiguous()
         self.o_proj.weight.data = o_weight.reshape(hidden_size, hidden_size).contiguous()
-     
+        
+    def peft_init(self):
+        q_weight = deepcopy(self.q_proj.weight.data) # (hidden_size, q_in_dim)
+        k_weight = deepcopy(self.k_proj.weight.data) # (hidden_size, k_in_dim)
+        if self.q_proj.bias is not None:
+            q_bias = deepcopy(self.q_proj.bias.data).unsqueeze(1) # (hidden_size, 1)
+            q_weight = torch.cat([q_weight, q_bias],dim=1)  # (hidden_size, q_in_dim+1)
+        if self.k_proj.bias is not None:
+            k_bias = deepcopy(self.k_proj.bias.data).unsqueeze(1) # (hidden_size, 1)
+            k_weight = torch.cat([k_weight, k_bias],dim=1)  # (hidden_size, k_in_dim+1)
+        q_norm = q_weight.norm(p=2, dim=-1)
+        k_norm = k_weight.norm(p=2, dim=-1)
+        qk_norm = q_norm * k_norm
+        qk_norm = qk_norm.view(self.n_head, self.qk_head_embd)
+        if self.q_proj.bias is not None:
+            self.q_proj.bias.data = (q_weight[:,-1]/q_norm).contiguous() # (num_head * head_dim, )
+            q_weight = q_weight[:,:-1]
+        if self.k_proj.bias is not None:
+            self.k_proj.bias.data = (k_weight[:,-1]/k_norm).contiguous() # (num_head * head_dim, )
+            k_weight = k_weight[:,:-1]
+        self.q_proj.weight.data = q_weight/q_norm.unsqueeze(1).contiguous()
+        self.k_proj.weight.data = k_weight/k_norm.unsqueeze(1).contiguous()
+        v_weight = deepcopy(self.v_proj.weight.data) # (hidden_size, v_in_dim)
+        o_weight = deepcopy(self.o_proj.weight.data) # (o_out_dim, hidden_size)
+        if self.v_proj.bias is not None:
+            v_bias = deepcopy(self.v_proj.bias.data).unsqueeze(1) # (v_out_dim, 1)
+            v_weight = torch.cat([v_weight, v_bias],dim=1)  # (hidden_size, v_in_dim+1)
+        v_norm = v_weight.norm(p=2, dim=-1)
+        o_norm = o_weight.norm(p=2, dim=0)
+        vo_norm = v_norm * o_norm
+        vo_norm = vo_norm.view(self.n_head, self.vo_head_embd)
+        if self.v_proj.bias is not None:
+            self.v_proj.bias.data = (v_weight[:,-1]/v_norm).contiguous() # (v_out_dim, )
+            v_weight = v_weight[:,:-1]
+        self.v_proj.weight.data = v_weight/v_norm.unsqueeze(1).contiguous()
+        self.o_proj.weight.data = o_weight/o_norm.unsqueeze(0).contiguous()
+        
+        qk_weight = deepcopy(self.qk_proj.weight.data) # (hidden_size, q_in_dim)
+        vo_weight = deepcopy(self.vo_proj.weight.data) # (hidden_size, q_in_dim)
+        qk_weight = qk_weight.view(self.n_head, self.qk_head_embd, self.qk_head_embd) # (num_heads, head_dim, k_in_dim) or (num_heads, head_dim, k_in_dim+1)
+        vo_weight = vo_weight.view(self.n_head, self.vo_head_embd, self.vo_head_embd) # (num_heads, head_dim, k_in_dim) or (num_heads, head_dim, k_in_dim+1)
+        for h in range(self.n_head):
+            qk_weight[h]=torch.diag(qk_norm[h])
+            vo_weight[h]=torch.diag(vo_norm[h])
+        self.qk_proj.weight.data = qk_weight.reshape(self.n_head*self.qk_head_embd, self.qk_head_embd).contiguous()
+        self.vo_proj.weight.data = vo_weight.reshape(self.n_head*self.vo_head_embd, self.vo_head_embd).contiguous()
+        
     def cal_qk_order_by_weight_norm(self):
         q_weight = self.q_proj.weight.data
         if self.q_proj.bias is not None:
@@ -271,6 +324,7 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     activation_pruning: bool = False
+    peft: bool = False
 
 class GPT(nn.Module):
 
